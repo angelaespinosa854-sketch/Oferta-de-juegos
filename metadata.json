@@ -1,0 +1,6 @@
+{
+  "name": "Deals e Impuestos Gamer Argentina",
+  "description": "Busca descuentos de juegos de PC y consola con cálculo automático de impuestos argentinos (IVA, PAIS, Ganancias) y notificaciones en tiempo real.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
