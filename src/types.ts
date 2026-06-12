@@ -15,7 +15,7 @@ export interface TaxConfig {
 }
 
 export interface GameDeal {
-  id: string;
+  id: string | number;
   title: string;
   platform: Platform;
   currency: 'USD' | 'ARS';
@@ -28,6 +28,11 @@ export interface GameDeal {
   metacriticScore?: number;
   playtimeHours?: number;
   historyPrices?: number[]; // list of past price points in the game's original currency
+
+  // Academic high-fidelity presentation requirements
+  discount?: number;
+  store?: 'Steam' | 'Xbox' | 'PlayStation' | 'Nintendo';
+  shopUrl?: string;
 }
 
 export interface CalculatedPrice {

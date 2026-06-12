@@ -26,18 +26,6 @@ import { Platform, TaxConfig, GameDeal, NotificationAlert, LiveNotification } fr
 import { DEFAULT_TAX_CONFIG, calculatePrice, formatCurrency, getTaxPercentage, PROVINCES } from './utils/taxCalculator';
 import { DEFAULT_DEALS } from './data/defaultDeals';
 
-// Import Firebase Services
-import { addAlert, subscribeUserAlerts, deleteAlert } from './services/alerts';
-import { getOrCreateUserProfile, updateUserProfile } from './services/users';
-import { 
-  onAuthStateChanged, 
-  createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword, 
-  signOut,
-  User 
-} from 'firebase/auth';
-import { auth } from './firebase';
-
 // Import our custom components
 import TaxCalculator from './components/TaxCalculator';
 import GameSearch from './components/GameSearch';
@@ -45,7 +33,6 @@ import NotificationToast, { playChime } from './components/NotificationToast';
 import { playClickSound, playTabSound, playSuccessSound, playDeleteSound } from './utils/audio';
 import CommunityFeatures from './components/CommunityFeatures';
 import GamerFAQ from './components/GamerFAQ';
-import PowerTools from './components/PowerTools';
 import PriceSparkline from './components/PriceSparkline';
 
 export default function App() {
@@ -112,9 +99,22 @@ export default function App() {
 
         const userObj = { uid: simulatedUid, email };
         localStorage.setItem('tgo_simulated_user_v1', JSON.stringify(userObj));
-        setCurrentUser(userObj);
         
-        await getOrCreateUserProfile(simulatedUid, email);
+        // Generate simulated user profile directly in localStorage
+        const profileKey = `tgo_user_profile_${simulatedUid}`;
+        const newProfile = {
+          userId: simulatedUid,
+          email,
+          displayName: email.split('@')[0],
+          preferredCurrency: 'ARS',
+          province: 'Capital Federal',
+          reputationXP: 120,
+          createdAt: { seconds: Math.floor(Date.now() / 1000) },
+          updatedAt: { seconds: Math.floor(Date.now() / 1000) }
+        };
+        localStorage.setItem(profileKey, JSON.stringify(newProfile));
+
+        setCurrentUser(userObj);
         playSuccessSound();
       } else {
         const matched = usersList.find((u: any) => u.email === email);
@@ -163,14 +163,17 @@ export default function App() {
     return DEFAULT_TAX_CONFIG;
   });
 
-  // Persistent taxConfig saver + Firestore Sync
+  // Persistent taxConfig saver + Local Profile Sync
   useEffect(() => {
     try {
       localStorage.setItem('tgo_tax_config_v1', JSON.stringify(taxConfig));
       if (currentUser) {
-        updateUserProfile(currentUser.uid, {
-          province: taxConfig.iibbProvince
-        }).catch(err => console.debug('Profile province sync deferred:', err));
+        const savedKey = `tgo_user_profile_${currentUser.uid}`;
+        const savedPrf = localStorage.getItem(savedKey);
+        const profile = savedPrf ? JSON.parse(savedPrf) : {};
+        profile.province = taxConfig.iibbProvince;
+        profile.updatedAt = { seconds: Math.floor(Date.now() / 1000) };
+        localStorage.setItem(savedKey, JSON.stringify(profile));
       }
     } catch (e) {
       console.warn('Could not save taxConfig', e);
@@ -240,16 +243,19 @@ export default function App() {
     try {
       localStorage.setItem('tgo_reputation_xp_v1', reputationXP.toString());
       if (currentUser) {
-        updateUserProfile(currentUser.uid, {
-          reputationXP
-        }).catch(err => console.debug('Profile reputation sync deferred:', err));
+        const savedKey = `tgo_user_profile_${currentUser.uid}`;
+        const savedPrf = localStorage.getItem(savedKey);
+        const profile = savedPrf ? JSON.parse(savedPrf) : {};
+        profile.reputationXP = reputationXP;
+        profile.updatedAt = { seconds: Math.floor(Date.now() / 1000) };
+        localStorage.setItem(savedKey, JSON.stringify(profile));
       }
     } catch (e) {
       console.warn(e);
     }
   }, [reputationXP, currentUser]);
 
-  // Register authentication state monitor
+  // Register authentication state monitor (Simulated Guest status)
   useEffect(() => {
     const localUserStr = localStorage.getItem('tgo_simulated_user_v1');
     if (localUserStr) {
@@ -257,32 +263,44 @@ export default function App() {
         const parsed = JSON.parse(localUserStr);
         if (parsed && parsed.uid) {
           setCurrentUser(parsed);
-          setAuthLoading(false);
-          return;
+        } else {
+          setCurrentUser(null);
         }
       } catch {
-        // Continue to firebase if parse error occurs
-      }
-    }
-
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setCurrentUser(user);
-      } else {
         setCurrentUser(null);
       }
-      setAuthLoading(false);
-    });
-    return () => unsubscribeAuth();
+    } else {
+      setCurrentUser(null);
+    }
+    setAuthLoading(false);
   }, []);
 
-  // Carga Inicial del Perfil (Gamer profile preferences initial synchronization)
+  // Carga Inicial del Perfil (Gamer profile preferences initial synchronization - local simulated)
   useEffect(() => {
     if (!currentUser) return;
 
-    const initProfile = async () => {
+    const initProfile = () => {
       try {
-        const profile = await getOrCreateUserProfile(currentUser.uid, currentUser.email || '');
+        const savedKey = `tgo_user_profile_${currentUser.uid}`;
+        const savedPrf = localStorage.getItem(savedKey);
+        
+        let profile;
+        if (savedPrf) {
+          profile = JSON.parse(savedPrf);
+        } else {
+          profile = {
+            userId: currentUser.uid,
+            email: currentUser.email || '',
+            displayName: (currentUser.email || '').split('@')[0],
+            preferredCurrency: 'ARS',
+            province: 'Capital Federal',
+            reputationXP: 120,
+            createdAt: { seconds: Math.floor(Date.now() / 1000) },
+            updatedAt: { seconds: Math.floor(Date.now() / 1000) }
+          };
+          localStorage.setItem(savedKey, JSON.stringify(profile));
+        }
+
         if (profile) {
           if (profile.reputationXP !== undefined) {
             setReputationXP(profile.reputationXP);
@@ -335,7 +353,48 @@ export default function App() {
   };
 
   // Sync / App State
-  const [alerts, setAlerts] = useState<NotificationAlert[]>([]);
+  const [alerts, setAlerts] = useState<NotificationAlert[]>(() => {
+    try {
+      const stored = localStorage.getItem('tgo_user_alerts_local_v2');
+      if (stored) {
+        return JSON.parse(stored);
+      }
+    } catch (e) {
+      console.warn('Error loading alerts from localStorage:', e);
+    }
+    // Default initial high-quality mock alerts for direct visual readiness
+    return [
+      {
+        id: 'default-1',
+        gameTitle: 'Elden Ring',
+        platform: Platform.STEAM,
+        targetPriceUsd: 40,
+        targetPriceArs: 0,
+        discountPercentThreshold: 10,
+        isActive: true,
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'default-2',
+        gameTitle: 'Hollow Knight',
+        platform: Platform.STEAM,
+        targetPriceUsd: 10,
+        targetPriceArs: 0,
+        discountPercentThreshold: 20,
+        isActive: true,
+        createdAt: new Date().toISOString()
+      }
+    ];
+  });
+
+  // Keep local storage in sync with local state changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('tgo_user_alerts_local_v2', JSON.stringify(alerts));
+    } catch (e) {
+      console.warn('Error saving alerts to localStorage:', e);
+    }
+  }, [alerts]);
   const [notifications, setNotifications] = useState<LiveNotification[]>([]);
   const [highlightDeals, setHighlightDeals] = useState<GameDeal[]>(DEFAULT_DEALS);
   const [isFetchingRates, setIsFetchingRates] = useState(false);
@@ -575,69 +634,30 @@ export default function App() {
     return () => clearInterval(pollInterval);
   }, []);
 
-  // Real-time Firestore alerts subscription
-  useEffect(() => {
-    if (!currentUser) {
-      setAlerts([]);
-      return;
-    }
-
-    const unsubscribe = subscribeUserAlerts(
-      currentUser.uid,
-      (firestoreAlerts) => {
-        const mappedAlerts: NotificationAlert[] = firestoreAlerts.map(a => ({
-          id: a.id,
-          gameTitle: a.gameTitle,
-          platform: a.platform as Platform,
-          targetPriceUsd: a.targetPriceUsd,
-          targetPriceArs: a.targetPriceArs,
-          discountPercentThreshold: a.discountPercentThreshold,
-          isActive: true,
-          createdAt: a.createdAt?.seconds 
-            ? new Date(a.createdAt.seconds * 1000).toISOString() 
-            : (typeof a.createdAt === 'string' ? a.createdAt : new Date().toISOString())
-        }));
-        // Sort newest on top
-        mappedAlerts.sort((x, y) => new Date(y.createdAt).getTime() - new Date(x.createdAt).getTime());
-        setAlerts(mappedAlerts);
-        localStorage.setItem('tgo_user_alerts_v1', JSON.stringify(mappedAlerts));
-      },
-      (error) => {
-        console.error('Error fetching real-time alerts from Firestore:', error);
-      }
-    );
-
-    return () => {
-      unsubscribe?.();
-    };
-  }, [currentUser]);
+  // Real-time Firestore alerts subscription (Removed and managed in clean local state)
+  // No subscription required because components directly update status!
 
   // Subscribe alert handler
-  const handleAddAlert = async (e: React.FormEvent) => {
+  const handleAddAlert = (e: React.FormEvent) => {
     e.preventDefault();
     if (!alertGameTitle.trim() || !currentUser) return;
 
     try {
       const isUSD = alertPlatform === Platform.STEAM || alertPlatform === Platform.PLAYSTATION;
-      const payload: any = {
+      const newAlertId = 'alert_local_' + Math.random().toString(36).substring(2, 11);
+      
+      const payload: NotificationAlert = {
+        id: newAlertId,
         gameTitle: alertGameTitle.trim(),
         platform: alertPlatform,
+        targetPriceUsd: isUSD && alertPrice ? parseFloat(alertPrice) : undefined,
+        targetPriceArs: !isUSD && alertPrice ? parseFloat(alertPrice) : undefined,
+        discountPercentThreshold: alertDiscountThreshold > 0 ? alertDiscountThreshold : undefined,
+        isActive: true,
+        createdAt: new Date().toISOString()
       };
 
-      if (alertPrice) {
-        if (isUSD) {
-          payload.targetPriceUsd = parseFloat(alertPrice);
-        } else {
-          payload.targetPriceArs = parseFloat(alertPrice);
-        }
-      }
-
-      if (alertDiscountThreshold > 0) {
-        payload.discountPercentThreshold = alertDiscountThreshold;
-      }
-
-      // Save alert directly to robust real-time cloud database
-      await addAlert(currentUser.uid, payload);
+      setAlerts(prev => [payload, ...prev]);
 
       setAlertGameTitle('');
       setAlertPrice('');
@@ -652,45 +672,50 @@ export default function App() {
       // Redirect to Alerts tab so they can see the "Historial de Seguidos" on the right!
       setActiveTab('alerts');
     } catch (e) {
-      console.error('Error creating user alert in Firestore', e);
+      console.error('Error creating user alert', e);
     }
   };
 
   // Quick subscribe handler from find result
-  const handleQuickAddAlertFromSearch = async (gameTitle: string, platform: Platform, currentPrice: number, isUSD: boolean) => {
+  const handleQuickAddAlertFromSearch = (gameTitle: string, platform: Platform, currentPrice: number, isUSD: boolean) => {
     if (!currentUser) return;
     try {
-      const payload: any = {
+      const newAlertId = 'alert_local_' + Math.random().toString(36).substring(2, 11);
+      const targetVal = Math.round(currentPrice * 0.9);
+      
+      const payload: NotificationAlert = {
+        id: newAlertId,
         gameTitle,
         platform,
-        [isUSD ? 'targetPriceUsd' : 'targetPriceArs']: Math.round(currentPrice * 0.9) // Alert if drops 10% more
+        targetPriceUsd: isUSD ? targetVal : undefined,
+        targetPriceArs: !isUSD ? targetVal : undefined,
+        isActive: true,
+        createdAt: new Date().toISOString()
       };
 
-      // Save alert directly to robust real-time cloud database
-      await addAlert(currentUser.uid, payload);
+      setAlerts(prev => [payload, ...prev]);
 
       fetchNotifications();
       playSuccessSound();
       addXP(15); // Award hunter search tracking XP
 
-      setAlertSuccessMessage(`¡Agregado!: Configurado aviso para ${gameTitle} si baja de ${isUSD ? 'u$s' : '$'} ${payload[isUSD ? 'targetPriceUsd' : 'targetPriceArs']}`);
+      setAlertSuccessMessage(`¡Agregado!: Configurado aviso para ${gameTitle} si baja de ${isUSD ? 'u$s' : '$'} ${targetVal}`);
       setTimeout(() => setAlertSuccessMessage(null), 4505);
 
       // Redirect to Alerts tab so they can see the "Historial de Seguidos" on the right!
       setActiveTab('alerts');
     } catch (e) {
-      console.error('Error creating search alert in Firestore', e);
+      console.error('Error creating search alert', e);
     }
   };
 
   // Delete Alert subscription
-  const handleDeleteAlert = async (id: string) => {
+  const handleDeleteAlert = (id: string) => {
     try {
-      // Delete alert directly from cloud database (real-time listener updates UI)
-      await deleteAlert(id);
+      setAlerts(prev => prev.filter(alert => alert.id !== id));
       playDeleteSound();
     } catch (e) {
-      console.error('Error deleting alert in Firestore', e);
+      console.error('Error deleting alert', e);
     }
   };
 
@@ -1038,12 +1063,11 @@ export default function App() {
                 {currentUser.email?.split('@')[0]}
               </span>
               <button
-                onClick={async () => {
+                onClick={() => {
                   try {
                     playClickSound();
                     localStorage.removeItem('tgo_simulated_user_v1');
                     setCurrentUser(null);
-                    await signOut(auth);
                   } catch (err) {
                     console.error('Error al cerrar sesión:', err);
                   }
@@ -1522,18 +1546,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Power User and Gamification hub */}
-              <div className="mt-2.5">
-                <PowerTools 
-                  maxBudget={maxBudget}
-                  setMaxBudget={setMaxBudget}
-                  reputationXP={reputationXP}
-                  addXP={addXP}
-                  onBulkImportAlerts={handleBulkImportAlerts}
-                  taxRatesJsonStr={JSON.stringify(taxConfig)}
-                />
-              </div>
-
               {/* Duelo de Precios: El deal más competitivo del momento en Argentina */}
               {(() => {
                 const duelWinner = [...highlightDeals].sort((a, b) => b.discountPercent - a.discountPercent)[0];
@@ -1665,12 +1677,12 @@ export default function App() {
                             Configurar Radar / Alerta
                           </button>
                           
-                          {primaryFeatured.storeUrl && (
+                          {(primaryFeatured.shopUrl || primaryFeatured.storeUrl) && (
                             <a
-                              href={primaryFeatured.storeUrl}
+                              href={primaryFeatured.shopUrl || primaryFeatured.storeUrl}
                               onClick={() => playClickSound()}
                               target="_blank"
-                              rel="noreferrer"
+                              rel="noopener noreferrer"
                               className="px-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg flex items-center justify-center transition-colors border border-indigo-500/10"
                               title="Visitar Tienda Oficial"
                             >
@@ -1698,15 +1710,19 @@ export default function App() {
                           key={deal.id}
                           className="rounded-xl border border-white/5 p-3.5 bg-slate-900/50 hover:bg-slate-900/80 hover:border-indigo-500/20 transition-all flex gap-4 items-center"
                         >
-                          <div 
-                            className="w-16 h-16 rounded-lg bg-slate-950 overflow-hidden bg-cover bg-center shrink-0 border border-white/5"
-                            style={{ backgroundImage: `url('${deal.imageUrl || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=150&auto=format&fit=crop&q=60'}')` }}
-                          />
+                          <div className="w-16 h-16 rounded-lg bg-slate-950 overflow-hidden shrink-0 border border-white/5">
+                            <img 
+                              src={deal.imageUrl || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=150&auto=format&fit=crop&q=60'}
+                              alt={deal.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
 
                           <div className="flex-grow min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="text-[9px] text-indigo-400 font-bold uppercase tracking-wider">{deal.platform}</span>
-                              <span className="text-[8px] font-mono text-rose-400 bg-rose-950/40 px-1 py-0.2 rounded">-{deal.discountPercent}% OFF</span>
+                              <span className="text-[9px] text-indigo-400 font-bold uppercase tracking-wider">{deal.store || deal.platform}</span>
+                              <span className="text-[8px] font-mono text-rose-400 bg-rose-950/40 px-1 py-0.2 rounded">-{deal.discount || deal.discountPercent}% OFF</span>
 
                               {maxBudget > 0 && (
                                 <span className={`text-[8px] px-1 py-0.2 rounded font-mono font-bold ${
@@ -1732,7 +1748,17 @@ export default function App() {
                                 </span>
                               )}
                             </div>
-                            <h4 className="font-bold text-sm text-white truncate mt-0.5">{deal.title}</h4>
+                            <h4 className="font-bold text-sm text-white truncate mt-0.5">
+                              <a 
+                                href={deal.shopUrl || deal.storeUrl || '#'} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                onClick={() => playClickSound()}
+                                className="hover:text-indigo-300 transition-colors"
+                              >
+                                {deal.title}
+                              </a>
+                            </h4>
                             <div className="mt-1 flex items-baseline gap-2">
                               <span className="text-emerald-400 font-extrabold text-sm font-mono">{formatCurrency(dealPriceCalculated.finalPriceArs, 'ARS')}</span>
                               <span className="text-[9px] text-slate-500 font-mono">Final c/ imp.</span>
@@ -1770,6 +1796,9 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4" id="catalogo-completo-grid">
                     {remainingDeals.map((deal) => {
                       const dealPriceCalculated = calculatePrice(deal.currentPrice, deal.currency, taxConfig);
+                      const shopLink = deal.shopUrl || deal.storeUrl || '#';
+                      const storeName = deal.store || deal.platform;
+                      const discountPercentage = deal.discount || deal.discountPercent;
                       
                       return (
                         <div 
@@ -1777,11 +1806,13 @@ export default function App() {
                           onClick={() => handleRecordClick(deal.title)}
                           className="group relative rounded-xl border border-white/5 bg-slate-900/30 overflow-hidden flex flex-col hover:border-indigo-500/20 hover:bg-slate-900/60 transition-all shadow-md duration-300"
                         >
-                          {/* Card image container */}
-                          <div className="relative h-44 overflow-hidden bg-slate-950 border-b border-white/5">
-                            <div 
-                              className="absolute inset-0 bg-cover bg-center group-hover:scale-105 transition-transform duration-500"
-                              style={{ backgroundImage: `url('${deal.imageUrl || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=300&auto=format&fit=crop&q=60' }')` }}
+                          {/* Card image container using clean requested <img> tags */}
+                          <div className="relative h-48 overflow-hidden bg-slate-950 border-b border-white/5">
+                            <img 
+                              src={deal.imageUrl || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=300&auto=format&fit=crop&q=60'}
+                              alt={deal.title}
+                              className="object-cover h-48 w-full rounded-t-lg group-hover:scale-105 transition-transform duration-500"
+                              referrerPolicy="no-referrer"
                             />
                             
                             {/* Hover overlay */}
@@ -1789,12 +1820,12 @@ export default function App() {
 
                             {/* Discount badge */}
                             <span className="absolute top-3 left-3 bg-rose-600 text-white font-bold text-[10px] px-2 py-0.5 rounded font-mono uppercase tracking-wider shadow">
-                              -{deal.discountPercent}% OFF
+                              -{discountPercentage}% OFF
                             </span>
 
                             {/* Platform Tag */}
                             <span className="absolute top-3 right-3 bg-slate-900/90 text-indigo-400 border border-indigo-500/10 font-mono text-[9px] uppercase font-bold px-2 py-0.5 rounded">
-                              {deal.platform}
+                              {storeName}
                             </span>
                           </div>
 
@@ -1802,7 +1833,15 @@ export default function App() {
                           <div className="p-3 flex flex-col flex-grow justify-between gap-2">
                             <div>
                               <h4 className="font-bold text-sm text-white truncate" title={deal.title}>
-                                {deal.title}
+                                <a 
+                                  href={shopLink} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer" 
+                                  onClick={() => playClickSound()}
+                                  className="hover:text-indigo-305 transition-colors"
+                                >
+                                  {deal.title}
+                                </a>
                               </h4>
 
                               {/* Metacritic & HLTB metrics bar */}
@@ -1849,7 +1888,7 @@ export default function App() {
                               {/* Price summary block */}
                               <div className="flex justify-between items-baseline mt-1 bg-slate-950/30 p-2 rounded border border-white/5">
                                 <div className="flex flex-col">
-                                  <span className="text-[8px] text-slate-500 font-mono">EN TIENDA</span>
+                                  <span className="text-[8px] text-slate-500 font-mono font-bold">BASE EN TIENDA</span>
                                   <span className="text-[10px] text-slate-400 font-mono line-through">
                                     {formatCurrency(deal.originalPrice, deal.currency)}
                                   </span>
@@ -1859,7 +1898,7 @@ export default function App() {
                                 </div>
                                 
                                 <div className="text-right flex flex-col">
-                                  <span className="text-[8px] text-emerald-400 font-bold font-sans">ARS FINAL C/ IMP</span>
+                                  <span className="text-[8.5px] text-emerald-400 font-bold font-sans">ARS FINAL CON AR IMP</span>
                                   <span className="text-sm text-emerald-400 font-extrabold font-mono leading-none">
                                     {formatCurrency(dealPriceCalculated.finalPriceArs, 'ARS')}
                                   </span>
@@ -1870,27 +1909,25 @@ export default function App() {
                               </div>
                             </div>
 
-                            {/* Actions bar */}
+                            {/* Actions bar with direct shop direct access link */}
                             <div className="grid grid-cols-5 gap-1.5 mt-1" onClick={(e) => e.stopPropagation()}>
                               <button
                                 onClick={() => handleQuickAddAlertFromSearch(deal.title, deal.platform, deal.currentPrice, deal.currency === 'USD')}
-                                className="col-span-4 bg-indigo-950/20 hover:bg-indigo-950/40 border border-indigo-500/10 text-indigo-300 hover:text-white py-1.5 rounded text-xs font-semibold tracking-wide transition-colors"
+                                className="col-span-3 bg-indigo-950/20 hover:bg-indigo-950/40 border border-indigo-500/10 text-indigo-300 hover:text-white py-1.5 rounded text-xs font-semibold tracking-wide transition-colors"
                               >
                                 Seguir Precio
                               </button>
                               
-                              {deal.storeUrl && (
-                                <a
-                                  href={deal.storeUrl}
-                                  onClick={() => playClickSound()}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="col-span-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded flex items-center justify-center transition-colors border border-white/5"
-                                  title="Ir a la tienda oficial"
-                                >
-                                  <ExternalLink className="w-3.5 h-3.5" />
-                                </a>
-                              )}
+                              <a
+                                href={shopLink}
+                                onClick={() => playClickSound()}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="col-span-2 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white rounded text-xs font-bold flex items-center justify-center gap-1 transition-all border border-emerald-500/20 hover:shadow-lg"
+                                title="Ir a la tienda oficial"
+                              >
+                                Oferta <ExternalLink className="w-3 h-3" />
+                              </a>
                             </div>
 
                             <div className="flex items-center justify-between gap-1.5 pt-2.5 border-t border-white/5 mt-2" onClick={(e) => e.stopPropagation()}>
