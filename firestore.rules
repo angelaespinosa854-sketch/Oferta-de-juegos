@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Global helper primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Pillar 2: Validation blueprints
+    function isValidUser(data) {
+      return data.userId is string && data.userId.size() <= 128 && data.userId == request.auth.uid
+        && data.email is string && data.email.size() <= 256
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100))
+        && (!('preferredCurrency' in data) || (data.preferredCurrency is string && data.preferredCurrency.size() <= 3))
+        && (!('province' in data) || (data.province is string && data.province.size() <= 100))
+        && (!('reputationXP' in data) || (data.reputationXP is number && data.reputationXP >= 0));
+    }
+
+    function isValidAlert(data) {
+      return data.userId is string && data.userId.size() <= 128 && data.userId == request.auth.uid
+        && data.gameTitle is string && data.gameTitle.size() <= 150
+        && data.platform is string && data.platform.size() <= 50
+        && (!('targetPriceUsd' in data) || (data.targetPriceUsd is number && data.targetPriceUsd >= 0))
+        && (!('targetPriceArs' in data) || (data.targetPriceArs is number && data.targetPriceArs >= 0))
+        && (!('discountPercentThreshold' in data) || (data.discountPercentThreshold is number && data.discountPercentThreshold >= 0 && data.discountPercentThreshold <= 100));
+    }
+
+    // Users Collection rules
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().createdAt == request.time;
+      allow update: if isOwner(userId) && isValidUser(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredCurrency', 'province', 'reputationXP', 'updatedAt'])
+        && incoming().updatedAt == request.time
+        && incoming().createdAt == existing().createdAt
+      );
+      allow delete: if isOwner(userId);
+    }
+
+    // Alerts Collection rules
+    match /alerts/{alertId} {
+      allow create: if isSignedIn() && isValidId(alertId) && isValidAlert(incoming()) && incoming().createdAt == request.time;
+      
+      // Enforce query checks during listing (Security Pillar 8)
+      allow get: if isSignedIn() && isOwner(existing().userId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow update: if isSignedIn() && isOwner(existing().userId) && isValidAlert(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['gameTitle', 'platform', 'targetPriceUsd', 'targetPriceArs', 'discountPercentThreshold', 'updatedAt'])
+      );
+      allow delete: if isSignedIn() && isOwner(existing().userId);
+    }
+  }
+}

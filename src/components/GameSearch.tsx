@@ -4,6 +4,7 @@ import { GameDeal, Platform, TaxConfig } from '../types';
 import { calculatePrice, formatCurrency } from '../utils/taxCalculator';
 import { playClickSound } from '../utils/audio';
 import PriceHistoryAndCompare from './PriceHistoryAndCompare';
+import { DEFAULT_DEALS } from '../data/defaultDeals';
 
 interface GameSearchProps {
   taxConfig: TaxConfig;
@@ -41,6 +42,49 @@ export default function GameSearch({ taxConfig, onAddCustomAlert }: GameSearchPr
   const [result, setResult] = useState<SearchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Autocomplete states
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Real-time matched items from our catalog to show in the dropdown with photos and live prices
+  const matchedDeals = React.useMemo(() => {
+    if (!searchQuery.trim() || searchQuery.trim().length < 2) return [];
+    const query = searchQuery.toLowerCase();
+    
+    // De-duplicate deals by title to keep the dropdown clean and premium
+    const uniqueDealsMap = new Map<string, GameDeal>();
+    DEFAULT_DEALS.forEach((deal) => {
+      if (deal.title.toLowerCase().includes(query)) {
+        const existing = uniqueDealsMap.get(deal.title);
+        // Prefer lower price or steam
+        if (!existing || deal.currentPrice < existing.currentPrice) {
+          uniqueDealsMap.set(deal.title, deal);
+        }
+      }
+    });
+    return Array.from(uniqueDealsMap.values()).slice(0, 4);
+  }, [searchQuery]);
+
+  // Fetch autocompletion results based on searchQuery state
+  React.useEffect(() => {
+    if (searchQuery.trim().length < 2) {
+      setSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/deals/autocomplete?q=${encodeURIComponent(searchQuery)}`);
+        const data = await res.json();
+        setSuggestions(data);
+      } catch (err) {
+        console.warn('Could not fetch autocomplete data', err);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   // Rotate loading messages
   React.useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -52,9 +96,10 @@ export default function GameSearch({ taxConfig, onAddCustomAlert }: GameSearchPr
     return () => clearInterval(interval);
   }, [loading]);
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
+  const handleSearch = async (e: React.FormEvent | null, overrideQuery?: string) => {
+    if (e) e.preventDefault();
+    const queryToUse = (overrideQuery || searchQuery).trim();
+    if (!queryToUse) return;
 
     setLoading(true);
     setError(null);
@@ -65,7 +110,7 @@ export default function GameSearch({ taxConfig, onAddCustomAlert }: GameSearchPr
       const response = await fetch('/api/deals/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: searchQuery.trim() }),
+        body: JSON.stringify({ query: queryToUse }),
       });
 
       const data = await response.json();
@@ -109,11 +154,105 @@ export default function GameSearch({ taxConfig, onAddCustomAlert }: GameSearchPr
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onFocus={() => setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 250)}
             placeholder="Ej: Hades II, GTA V, Hogwarts Legacy, Zelda..."
             className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl p-3 pl-10 text-white text-sm outline-none transition-colors"
             disabled={loading}
             id="ai-search-input"
+            autoComplete="off"
           />
+
+          {showSuggestions && (searchQuery.trim().length >= 2) && (matchedDeals.length > 0 || suggestions.length > 0) && (
+            <div className="absolute left-0 right-0 top-full z-50 mt-1.5 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden shadow-2xl divide-y divide-white/5 max-h-[380px] overflow-y-auto">
+              {/* Section 1: Real-time matches with photos & prices */}
+              {matchedDeals.length > 0 && (
+                <div className="p-2">
+                  <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono font-bold px-2 py-1 mb-1">
+                    🎮 Resultados en catálogo (Precios c/Imp)
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {matchedDeals.map((deal) => {
+                      const calculated = calculatePrice(deal.currentPrice, deal.currency, taxConfig);
+                      return (
+                        <button
+                          key={deal.id}
+                          type="button"
+                          onClick={() => {
+                            playClickSound();
+                            setSearchQuery(deal.title);
+                            setSuggestions([]);
+                            setShowSuggestions(false);
+                            handleSearch(null, deal.title);
+                          }}
+                          className="w-full text-left p-2 rounded-lg hover:bg-slate-900 transition-all flex items-center gap-3 cursor-pointer group"
+                        >
+                          <img
+                            src={deal.imageUrl || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=80&auto=format&fit=crop&q=60'}
+                            alt={deal.title}
+                            className="w-10 h-10 rounded object-cover border border-slate-800 group-hover:border-slate-700"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-bold text-slate-200 group-hover:text-white truncate">
+                              {deal.title}
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                                deal.platform === Platform.STEAM ? 'bg-blue-900/40 text-blue-300 border border-blue-500/20' :
+                                deal.platform === Platform.XBOX ? 'bg-green-900/40 text-green-300 border border-green-500/20' :
+                                deal.platform === Platform.PLAYSTATION ? 'bg-indigo-900/40 text-indigo-300 border border-indigo-500/20' :
+                                'bg-red-900/40 text-red-300 border border-red-500/20'
+                              }`}>
+                                {deal.platform}
+                              </span>
+                              {deal.discountPercent > 0 && (
+                                <span className="text-[10px] text-rose-450 font-bold font-mono">
+                                  -{deal.discountPercent}%
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="text-[9px] text-slate-500 block font-mono">Total Final</span>
+                            <span className="text-xs font-bold text-emerald-400 font-mono">
+                              {formatCurrency(calculated.finalPriceArs, 'ARS')}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Section 2: Autocomplete suggestions list */}
+              {suggestions.length > 0 && (
+                <div className="p-2">
+                  <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono font-bold px-2 py-1 mb-1 font-sans">
+                    🔍 Sugerencias Inteligentes
+                  </div>
+                  {suggestions.map((suggestion, index) => (
+                    <button
+                      key={index}
+                      type="button"
+                      onClick={() => {
+                        playClickSound();
+                        setSearchQuery(suggestion);
+                        setSuggestions([]);
+                        setShowSuggestions(false);
+                        handleSearch(null, suggestion);
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:text-white hover:bg-slate-900 rounded-lg transition-colors cursor-pointer flex items-center gap-2"
+                    >
+                      <span className="text-slate-500 text-[10px]">🔎</span>
+                      <span>{suggestion}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <button
           type="submit"
@@ -141,16 +280,7 @@ export default function GameSearch({ taxConfig, onAddCustomAlert }: GameSearchPr
             onClick={() => {
               playClickSound();
               setSearchQuery(game);
-              // Set search query and trigger search
-              setTimeout(() => {
-                const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
-                // Query needs to be submitted after state update finishes
-                const searchInput = document.getElementById('ai-search-input') as HTMLInputElement | null;
-                if (searchInput) {
-                  searchInput.value = game;
-                }
-                handleSearch(fakeEvent);
-              }, 50);
+              handleSearch(null, game);
             }}
             disabled={loading}
             className="text-[10px] bg-slate-950 border border-slate-800 hover:border-amber-500/50 hover:bg-slate-900 text-slate-400 hover:text-amber-300 px-2.5 py-1 rounded-full transition-all focus:outline-none cursor-pointer"

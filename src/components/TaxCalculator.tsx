@@ -12,6 +12,7 @@ interface TaxCalculatorProps {
 export default function TaxCalculator({ taxConfig, setTaxConfig }: TaxCalculatorProps) {
   const [simulationPrice, setSimulationPrice] = useState<string>('29.99');
   const [simulationCurrency, setSimulationCurrency] = useState<'USD' | 'ARS'>('USD');
+  const [simulationStore, setSimulationStore] = useState<'steam' | 'psn' | 'xbox' | 'nintendo'>('steam');
   const [showExplanation, setShowExplanation] = useState(false);
   
   // Portability state variables
@@ -297,32 +298,89 @@ export default function TaxCalculator({ taxConfig, setTaxConfig }: TaxCalculator
       </div>
 
       {/* Live Interactive Tax Simulator */}
-      <div className="bg-slate-950/55 p-4 rounded-xl border border-slate-850">
-        <h4 className="text-sky-300 font-semibold text-xs uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+      <div className="bg-slate-950/55 p-5 rounded-xl border border-slate-850">
+        <h4 className="text-sky-300 font-semibold text-xs uppercase tracking-wider mb-3.5 flex items-center gap-1.5">
           <ArrowRightLeft className="w-3.5 h-3.5 text-sky-400" />
           Simulador de Conversión de Precios de un Juego
         </h4>
+
+        {/* Store selector that sets currency base and automatically converts value */}
+        <div className="mb-4">
+          <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-2">
+            Paso 1: Seleccionar Tienda de Compra (Establece Divisa Original)
+          </label>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            {[
+              { id: 'steam' as const, name: 'Steam 🕹️', desc: 'Cotiza en USD', currency: 'USD' as const },
+              { id: 'psn' as const, name: 'PlayStation Store 💙', desc: 'Cotiza en USD', currency: 'USD' as const },
+              { id: 'xbox' as const, name: 'Xbox Store 💚', desc: 'Cotiza en ARS', currency: 'ARS' as const },
+              { id: 'nintendo' as const, name: 'Nintendo eShop ❤️', desc: 'Cotiza en ARS', currency: 'ARS' as const }
+            ].map((store) => (
+              <button
+                key={store.id}
+                type="button"
+                onClick={() => {
+                  playClickSound();
+                  setSimulationStore(store.id);
+                  if (store.currency !== simulationCurrency) {
+                    const currentPrice = parseFloat(simulationPrice) || 0;
+                    if (store.currency === 'ARS') {
+                      const converted = currentPrice * taxConfig.dolarOficial;
+                      setSimulationPrice(currentPrice > 0 ? converted.toFixed(2) : '40000');
+                    } else {
+                      const converted = currentPrice / taxConfig.dolarOficial;
+                      setSimulationPrice(currentPrice > 0 ? converted.toFixed(2) : '29.99');
+                    }
+                    setSimulationCurrency(store.currency);
+                  }
+                }}
+                className={`p-2.5 rounded-lg border text-left transition-all ${
+                  simulationStore === store.id
+                    ? 'bg-slate-900 border-sky-500 text-sky-400 shadow-md shadow-sky-500/5'
+                    : 'bg-slate-900/40 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                }`}
+              >
+                <div className="text-xs font-bold">{store.name}</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">{store.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-2">
+          Paso 2: Ingresar Precio Base e Intercambiar Moneda
+        </label>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex gap-2">
               <div className="relative flex-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-mono text-xs">
+                  {simulationCurrency === 'USD' ? 'u$s' : '$'}
+                </span>
                 <input
                   type="number"
                   step="0.01"
                   value={simulationPrice}
                   onChange={(e) => setSimulationPrice(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-750 p-2.5 rounded-lg text-white font-mono text-sm focus:border-sky-500 outline-none"
+                  className="w-full bg-slate-900 border border-slate-750 p-2.5 pl-9 rounded-lg text-white font-mono text-sm focus:border-sky-500 outline-none"
                   placeholder="Precio del juego..."
                   id="input-sim-price"
                 />
               </div>
+              
               <div className="flex rounded-lg border border-slate-750 overflow-hidden shrink-0">
                 <button
                   type="button"
                   onClick={() => {
                     playClickSound();
-                    setSimulationCurrency('USD');
+                    if (simulationCurrency !== 'USD') {
+                      const currentPrice = parseFloat(simulationPrice) || 0;
+                      const converted = currentPrice / taxConfig.dolarOficial;
+                      setSimulationPrice(currentPrice > 0 ? converted.toFixed(2) : '29.99');
+                      setSimulationCurrency('USD');
+                      setSimulationStore('steam'); // Default store with USD
+                    }
                   }}
                   className={`px-3 py-1 text-xs font-mono font-bold transition-colors ${
                     simulationCurrency === 'USD' ? 'bg-sky-500 text-slate-900' : 'bg-slate-900 text-slate-400 hover:text-white'
@@ -335,7 +393,13 @@ export default function TaxCalculator({ taxConfig, setTaxConfig }: TaxCalculator
                   type="button"
                   onClick={() => {
                     playClickSound();
-                    setSimulationCurrency('ARS');
+                    if (simulationCurrency !== 'ARS') {
+                      const currentPrice = parseFloat(simulationPrice) || 0;
+                      const converted = currentPrice * taxConfig.dolarOficial;
+                      setSimulationPrice(currentPrice > 0 ? converted.toFixed(2) : '40000');
+                      setSimulationCurrency('ARS');
+                      setSimulationStore('xbox'); // Default store with ARS
+                    }
                   }}
                   className={`px-3 py-1 text-xs font-mono font-bold transition-colors ${
                     simulationCurrency === 'ARS' ? 'bg-sky-500 text-slate-900' : 'bg-slate-900 text-slate-400 hover:text-white'
@@ -346,55 +410,83 @@ export default function TaxCalculator({ taxConfig, setTaxConfig }: TaxCalculator
                 </button>
               </div>
             </div>
-            <div className="text-[11px] text-slate-500 leading-normal">
+            <div className="text-[11px] text-slate-400 leading-normal bg-slate-900/40 p-2.5 rounded-lg border border-slate-850 mt-1">
               {simulationCurrency === 'USD' ? (
                 <span>
-                  Steam o PSN. Valor base convertido: <strong className="font-mono text-slate-400">{formatCurrency(result.basePriceArs)}</strong>
+                  🛒 <strong>Steam / PlayStation</strong>: Cotiza base en dólares. Conversión limpia a Pesos Oficiales: <strong className="font-mono text-sky-400">{formatCurrency(result.basePriceArs)}</strong> (calculado sobre $ {taxConfig.dolarOficial.toFixed(2)} por dólar oficial de aduana/tienda).
                 </span>
               ) : (
                 <span>
-                  Xbox o Nintendo. El precio de tienda ya está listado en Pesos Argentinos.
+                  🛒 <strong>Xbox / Nintendo</strong>: Cotiza base directamente en pesos argentinos sin tipo de cambio. Los impuestos se gravan directamente sobre el importe base.
                 </span>
               )}
             </div>
           </div>
 
-          <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 text-center flex flex-col justify-center">
-            <span className="text-[11px] text-slate-500 font-medium">TOTAL ESTIMADO CON IMPUESTOS ( {taxPercentTotal}% de recargo )</span>
-            <span className="text-xl md:text-2xl font-mono font-extrabold text-emerald-400 tracking-tight mt-0.5">
+          <div className="bg-slate-900 p-4 rounded-lg border border-slate-800 text-center flex flex-col justify-center shadow-inner">
+            <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider block">
+              TOTAL ESTIMADO CON IMPUESTOS (+{taxPercentTotal}% de recargo)
+            </span>
+            <span className="text-2xl md:text-3xl font-mono font-extrabold text-emerald-400 tracking-tight mt-1.5 drop-shadow-sm">
               {formatCurrency(result.finalPriceArs, 'ARS')}
             </span>
-            <span className="text-[10px] text-slate-500 font-mono mt-0.5">
-              Ref base: {formatCurrency(result.basePriceArs)} + {formatCurrency(result.taxesArs)} impuestos
+            <span className="text-[10px] text-slate-500 font-mono mt-1 block">
+              Juego Base: {formatCurrency(result.basePriceArs)} + {formatCurrency(result.taxesArs)} impuestos totales
             </span>
           </div>
         </div>
 
-        {/* Visual tax proportion bar */}
+        {/* Dynamic Visual Tax Proportion Bar */}
         {result.finalPriceArs > 0 && (
-          <div className="mt-4 pt-4 border-t border-slate-850/60">
-            <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1.5 font-mono">
-              <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded-sm bg-sky-500 block" /> 
-                Juego Base ({Math.round(basePercentOfTotal)}%)
+          <div className="mt-5 pt-4 border-t border-slate-850/60">
+            <div className="flex items-center justify-between text-[11px] text-slate-400 mb-2 font-mono">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded bg-sky-500 block" /> 
+                Juego Base Puro ({Math.round(basePercentOfTotal)}%)
               </span>
-              <span className="flex items-center gap-1 text-rose-400">
-                <span className="w-2.5 h-2.5 rounded-sm bg-rose-500 block" />
-                Impuestos ({Math.round(taxPercentOfTotal)}%)
+              <span className="flex items-center gap-1.5 text-rose-400">
+                <span className="w-2.5 h-2.5 rounded bg-rose-500 block" />
+                Recargo Impositivo Total ({Math.round(taxPercentOfTotal)}%)
               </span>
             </div>
             {/* Visual ratio bar widget */}
-            <div className="w-full h-3 rounded-full overflow-hidden flex bg-slate-800">
+            <div className="w-full h-3.5 rounded-full overflow-hidden flex bg-slate-800 border border-slate-700/30">
               <div 
-                className="bg-sky-500 h-full transition-all duration-300" 
+                className="bg-sky-500 h-full transition-all duration-300 shadow-[inset_-2px_0_4px_rgba(0,0,0,0.15)]" 
                 style={{ width: `${basePercentOfTotal}%` }} 
-                title="Costo de juego base puro"
+                title="Costo de juego base"
               />
               <div 
-                className="bg-rose-500 h-full transition-all duration-300" 
+                className="bg-rose-500 h-full transition-all duration-300 shadow-[inset_2px_0_4px_rgba(0,0,0,0.15)]" 
                 style={{ width: `${taxPercentOfTotal}%` }} 
-                title="Suma total de impuestos argentinos"
+                title="Impuestos"
               />
+            </div>
+          </div>
+        )}
+
+        {/* Detailed Taxes Breakdown in ARS */}
+        {result.finalPriceArs > 0 && (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mt-4">
+            <div className="bg-slate-900/70 p-2.5 rounded-lg border border-slate-800/80 flex flex-col justify-between">
+              <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider font-mono">IVA Serv. Dig.</span>
+              <span className="text-white text-[10px] font-mono mt-0.5">{taxConfig.iva * 100}%</span>
+              <span className="font-mono text-sky-300 font-semibold text-xs mt-1.5 block">{formatCurrency(result.detailedTaxes.iva)}</span>
+            </div>
+            <div className="bg-slate-900/70 p-2.5 rounded-lg border border-slate-800/80 flex flex-col justify-between">
+              <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider font-mono">Impuesto PAIS</span>
+              <span className="text-white text-[10px] font-mono mt-0.5">{taxConfig.pais * 100}%</span>
+              <span className="font-mono text-sky-300 font-semibold text-xs mt-1.5 block">{formatCurrency(result.detailedTaxes.pais)}</span>
+            </div>
+            <div className="bg-slate-900/70 p-2.5 rounded-lg border border-slate-800/80 flex flex-col justify-between">
+              <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider font-mono">Percepciones</span>
+              <span className="text-white text-[10px] font-mono mt-0.5">{taxConfig.ganancias * 100}%</span>
+              <span className="font-mono text-sky-300 font-semibold text-xs mt-1.5 block">{formatCurrency(result.detailedTaxes.ganancias)}</span>
+            </div>
+            <div className="bg-slate-900/70 p-2.5 rounded-lg border border-slate-800/80 flex flex-col justify-between">
+              <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider font-mono">IIBB ({taxConfig.iibbProvince.split(' ')[0]})</span>
+              <span className="text-white text-[10px] font-mono mt-0.5">{(taxConfig.iibbRate * 100).toFixed(1)}%</span>
+              <span className="font-mono text-sky-300 font-semibold text-xs mt-1.5 block">{formatCurrency(result.detailedTaxes.iibb)}</span>
             </div>
           </div>
         )}

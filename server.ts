@@ -387,8 +387,8 @@ app.get('/api/rates', async (req, res) => {
 
     clearTimeout(timeoutId);
 
-    const dolarOficial = oficialRes?.venta || 935.00;
-    const dolarTarjeta = tarjetaRes?.venta || 1496.00; // typically oficial * 1.6
+    const dolarOficial = oficialRes?.venta || 1460.00;
+    const dolarTarjeta = tarjetaRes?.venta || 2336.00; // typically oficial * 1.6
 
     res.json({
       success: true,
@@ -403,8 +403,8 @@ app.get('/api/rates', async (req, res) => {
     res.json({
       success: true,
       rates: {
-        dolarOficial: 935.00,
-        dolarTarjeta: 1496.00,
+        dolarOficial: 1460.00,
+        dolarTarjeta: 2336.00,
         lastUpdated: new Date().toISOString()
       },
       message: 'Cotización por defecto (offline)'
@@ -494,6 +494,46 @@ app.post('/api/notifications/simulate-deal', (req, res) => {
 
   notifications.unshift(newNotif);
   res.json(newNotif);
+});
+
+// Autocomplete suggestions endpoint for game names
+app.get('/api/deals/autocomplete', (req, res) => {
+  const query = (req.query.q || '').toString().toLowerCase().trim();
+  if (!query) {
+    return res.json([]);
+  }
+  
+  // List of highly high-profile and searched game titles in Argentina
+  const popularGames = [
+    'Elden Ring',
+    'Hollow Knight',
+    'Cyberpunk 2070',
+    'Cyberpunk 2077',
+    'Red Dead Redemption 2',
+    'Marvel\'s Spider-Man 2',
+    'Resident Evil 4 Remake',
+    'Celeste',
+    'The Legend of Zelda: Breath of the Wild',
+    'The Legend of Zelda: Tears of the Kingdom',
+    'Hades II',
+    'God of War Ragnarök',
+    'EA SPORTS FC 26',
+    'Minecraft Legends',
+    'Super Mario Odyssey',
+    'Baldur\'s Gate 3',
+    'Grand Theft Auto V',
+    'Sekiro: Shadows Die Twice',
+    'Silksong',
+    'Hades',
+    'Dead Cells',
+    'Fallout 4',
+    'Terraria',
+    'Stardew Valley',
+    'Black Myth: Wukong',
+    'Forza Horizon 5'
+  ];
+  const filtered = popularGames.filter(g => g.toLowerCase().includes(query)).slice(0, 5);
+  res.json(filtered);
 });
 
 // 4. Live AI Game Deals Search utilizing Gemini API with Web Search Grounding
@@ -633,8 +673,8 @@ app.post('/api/deals/search', async (req, res) => {
       const hasNintendo = matchedGames.some(g => g.platform === 'Nintendo eShop');
       
       // Calculate realistic base price values
-      let baseUSD = firstMatch.currency === 'USD' ? firstMatch.currentPrice : (firstMatch.currentPrice / 935);
-      let originalUSD = firstMatch.currency === 'USD' ? firstMatch.originalPrice : (firstMatch.originalPrice / 935);
+      let baseUSD = firstMatch.currency === 'USD' ? firstMatch.currentPrice : (firstMatch.currentPrice / 1460);
+      let originalUSD = firstMatch.currency === 'USD' ? firstMatch.originalPrice : (firstMatch.originalPrice / 1460);
       const discount = firstMatch.discountPercent || 0;
 
       // Ensure nice rounded numbers for generated assets
@@ -706,7 +746,7 @@ app.post('/api/deals/search', async (req, res) => {
       gameTitle: firstMatchTitle,
       playtimeHours,
       deals: generatedDeals,
-      aiSummary: `Para comprar ${firstMatchTitle} en Argentina, compará con cuidado: las tiendas pesificadas (Xbox y Nintendo) tributan impuestos provinciales y nacionales directos, mientras que Steam y PlayStation Store facturan en dólares tarjeta (u$s 1 = $1496 aprox). Con una duración de ${playtimeHours} horas HLTB, ¡es muy rentable comprarlo con descuento!`
+      aiSummary: `Para comprar ${firstMatchTitle} en Argentina, compará con cuidado: las tiendas pesificadas (Xbox y Nintendo) tributan impuestos provinciales y nacionales directos, mientras que Steam y PlayStation Store facturan en dólares tarjeta (u$s 1 = $2336 aprox). Con una duración de ${playtimeHours} horas HLTB, ¡es muy rentable comprarlo con descuento!`
     };
 
     saveToCache(cacheKey, fallbackResponse);

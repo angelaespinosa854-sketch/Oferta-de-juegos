@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "user": {
+      "title": "Gamer User",
+      "description": "Datos de perfil del gamer y sus configuraciones.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The unique user ID matching their Firebase Auth UID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "The user's gamer tag or name" },
+        "preferredCurrency": { "type": "string", "enum": ["ARS", "USD"], "description": "Selected currency mode (ARS or USD)" },
+        "province": { "type": "string", "description": "Argetine province for tax config" },
+        "reputationXP": { "type": "number", "description": "Gamer XP score" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
+      },
+      "required": ["userId", "email"]
+    },
+    "alert": {
+      "title": "Price Alert",
+      "description": "Alerta de precio para un juego de PC/Consola.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Auth user ID" },
+        "gameTitle": { "type": "string", "description": "Title of the monitored game" },
+        "platform": { "type": "string", "description": "The store target platform" },
+        "targetPriceUsd": { "type": "number", "description": "Target alert price in USD" },
+        "targetPriceArs": { "type": "number", "description": "Target alert price in ARS" },
+        "discountPercentThreshold": { "type": "number", "description": "Desired discount threshold percent" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["userId", "gameTitle", "platform"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "user",
+      "description": "User custom presets and settings profiles"
+    },
+    "/alerts/{alertId}": {
+      "schema": "alert",
+      "description": "Custom gamer game price alerts and thresholds"
+    }
+  }
+}

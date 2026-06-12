@@ -13,7 +13,7 @@ export const PROVINCES = [
 ];
 
 export const DEFAULT_TAX_CONFIG: TaxConfig = {
-  dolarOficial: 935.00, // Current mid-2026 approximate official rate
+  dolarOficial: 1460.00, // Current mid-2026 official rate based on Banco Nación
   iva: 0.21,           // 21% Digital Services IVA
   pais: 0.08,          // 8% PAIS tax for Digital Services
   ganancias: 0.30,     // 30% digital services withholding

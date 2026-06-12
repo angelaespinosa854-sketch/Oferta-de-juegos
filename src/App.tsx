@@ -23,8 +23,20 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 import { Platform, TaxConfig, GameDeal, NotificationAlert, LiveNotification } from './types';
-import { DEFAULT_TAX_CONFIG, calculatePrice, formatCurrency, getTaxPercentage } from './utils/taxCalculator';
+import { DEFAULT_TAX_CONFIG, calculatePrice, formatCurrency, getTaxPercentage, PROVINCES } from './utils/taxCalculator';
 import { DEFAULT_DEALS } from './data/defaultDeals';
+
+// Import Firebase Services
+import { addAlert, subscribeUserAlerts, deleteAlert } from './services/alerts';
+import { getOrCreateUserProfile, updateUserProfile } from './services/users';
+import { 
+  onAuthStateChanged, 
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signOut,
+  User 
+} from 'firebase/auth';
+import { auth } from './firebase';
 
 // Import our custom components
 import TaxCalculator from './components/TaxCalculator';
@@ -37,6 +49,107 @@ import PowerTools from './components/PowerTools';
 import PriceSparkline from './components/PriceSparkline';
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<any | null>(() => {
+    try {
+      const savedUser = localStorage.getItem('tgo_simulated_user_v1');
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+
+  // Credentials Auth States
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [isRegister, setIsRegister] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthSubmitting(true);
+    
+    // Synthesize delay for deep-immersion gamer experience
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    const email = authEmail.trim().toLowerCase();
+    const password = authPassword;
+
+    if (!email || !password) {
+      setAuthError('Por favor, completá todos los campos.');
+      setAuthSubmitting(false);
+      return;
+    }
+
+    try {
+      // Retrieve simulated users database from localStorage
+      const savedUsersStr = localStorage.getItem('tgo_simulated_users_db_v1');
+      const usersList = savedUsersStr ? JSON.parse(savedUsersStr) : [];
+
+      if (isRegister) {
+        // Validation check
+        if (password.length < 6) {
+          throw { code: 'auth/weak-password' };
+        }
+        
+        // Check for conflicts
+        const userExists = usersList.some((u: any) => u.email === email);
+        if (userExists) {
+          throw { code: 'auth/email-already-in-use' };
+        }
+
+        // Provision simulated user uid
+        const simulatedUid = 'user_local_' + Math.random().toString(36).substring(2, 11);
+        const newSimulatedAccount = {
+          email,
+          password,
+          uid: simulatedUid
+        };
+        usersList.push(newSimulatedAccount);
+        localStorage.setItem('tgo_simulated_users_db_v1', JSON.stringify(usersList));
+
+        const userObj = { uid: simulatedUid, email };
+        localStorage.setItem('tgo_simulated_user_v1', JSON.stringify(userObj));
+        setCurrentUser(userObj);
+        
+        await getOrCreateUserProfile(simulatedUid, email);
+        playSuccessSound();
+      } else {
+        const matched = usersList.find((u: any) => u.email === email);
+        if (!matched || matched.password !== password) {
+          throw { code: 'auth/wrong-password' };
+        }
+
+        const userObj = { uid: matched.uid, email: matched.email };
+        localStorage.setItem('tgo_simulated_user_v1', JSON.stringify(userObj));
+        setCurrentUser(userObj);
+        
+        playSuccessSound();
+      }
+    } catch (err: any) {
+      console.error('Simulated auth action failed:', err);
+      let readableError = 'Error al procesar la solicitud.';
+      if (err.code === 'auth/weak-password') {
+        readableError = 'La contraseña debe tener al menos 6 caracteres.';
+      } else if (err.code === 'auth/email-already-in-use') {
+        readableError = 'Esta dirección de correo ya está registrada localmente.';
+      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        readableError = 'Credenciales inválidas. Verificá tu email y contraseña.';
+      } else if (err.code === 'auth/invalid-email') {
+        readableError = 'El formato de correo no es válido.';
+      } else if (err.code === 'auth/user-not-found') {
+        readableError = 'No encontramos una cuenta con este correo.';
+      } else if (err.message) {
+        readableError = err.message;
+      }
+      setAuthError(readableError);
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
   // Config state with lazy initial load from localStorage for persistent tax config
   const [taxConfig, setTaxConfig] = useState<TaxConfig>(() => {
     try {
@@ -50,14 +163,19 @@ export default function App() {
     return DEFAULT_TAX_CONFIG;
   });
 
-  // Persistent taxConfig saver
+  // Persistent taxConfig saver + Firestore Sync
   useEffect(() => {
     try {
       localStorage.setItem('tgo_tax_config_v1', JSON.stringify(taxConfig));
+      if (currentUser) {
+        updateUserProfile(currentUser.uid, {
+          province: taxConfig.iibbProvince
+        }).catch(err => console.debug('Profile province sync deferred:', err));
+      }
     } catch (e) {
       console.warn('Could not save taxConfig', e);
     }
-  }, [taxConfig]);
+  }, [taxConfig, currentUser]);
 
   // Notification Authorization status state for the Browser Push Notifications
   const [browserNotificationGranted, setBrowserNotificationGranted] = useState<boolean>(() => {
@@ -88,8 +206,8 @@ export default function App() {
     }
   };
   
-  // Tab navigation: 'dashboard' | 'alerts' | 'calculator'
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'alerts' | 'calculator'>('dashboard');
+  // Tab navigation: 'dashboard' | 'alerts' | 'calculator' | 'community'
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'alerts' | 'calculator' | 'community'>('dashboard');
 
   // Power User and Gamification states
   const [maxBudget, setMaxBudget] = useState<number>(() => {
@@ -121,10 +239,71 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem('tgo_reputation_xp_v1', reputationXP.toString());
+      if (currentUser) {
+        updateUserProfile(currentUser.uid, {
+          reputationXP
+        }).catch(err => console.debug('Profile reputation sync deferred:', err));
+      }
     } catch (e) {
       console.warn(e);
     }
-  }, [reputationXP]);
+  }, [reputationXP, currentUser]);
+
+  // Register authentication state monitor
+  useEffect(() => {
+    const localUserStr = localStorage.getItem('tgo_simulated_user_v1');
+    if (localUserStr) {
+      try {
+        const parsed = JSON.parse(localUserStr);
+        if (parsed && parsed.uid) {
+          setCurrentUser(parsed);
+          setAuthLoading(false);
+          return;
+        }
+      } catch {
+        // Continue to firebase if parse error occurs
+      }
+    }
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setCurrentUser(user);
+      } else {
+        setCurrentUser(null);
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubscribeAuth();
+  }, []);
+
+  // Carga Inicial del Perfil (Gamer profile preferences initial synchronization)
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const initProfile = async () => {
+      try {
+        const profile = await getOrCreateUserProfile(currentUser.uid, currentUser.email || '');
+        if (profile) {
+          if (profile.reputationXP !== undefined) {
+            setReputationXP(profile.reputationXP);
+          }
+          if (profile.province) {
+            const matchingProv = PROVINCES.find(p => p.name === profile.province || p.name.includes(profile.province));
+            if (matchingProv) {
+              setTaxConfig(prev => ({
+                ...prev,
+                iibbProvince: matchingProv.name,
+                iibbRate: matchingProv.rate
+              }));
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to auto-sync user profile features:', err);
+      }
+    };
+    initProfile();
+  }, [currentUser]);
 
   const addXP = (amount: number) => {
     setReputationXP(prev => prev + amount);
@@ -163,10 +342,17 @@ export default function App() {
   const [isFetchingHighlights, setIsFetchingHighlights] = useState(false);
   const [ratesLastUpdated, setRatesLastUpdated] = useState<string>('');
   const [currencyDataSource, setCurrencyDataSource] = useState<string>('Precios estimativos');
+  
+  // Catalog active filter, sorting, and display state
+  const [activeCatalogFilter, setActiveCatalogFilter] = useState<'all' | 'discount' | 'price-error' | 'steam' | 'xbox'>('all');
 
   // Community Features hooks
-  const { VoteWidget, TrendingPanel, handleRecordClick } = CommunityFeatures({
+  const { VoteWidget, TrendingPanel, handleRecordClick, CommunityFeed } = CommunityFeatures({
     monitoredGames: highlightDeals,
+    reputationXP,
+    addXP,
+    triggerLiveNotification,
+    taxConfig,
     onQuickSearch: (query) => {
       const searchInput = document.getElementById('ai-search-input') as HTMLInputElement | null;
       if (searchInput) {
@@ -194,14 +380,35 @@ export default function App() {
   const [alertDiscountThreshold, setAlertDiscountThreshold] = useState<number>(0);
   const [alertSuccessMessage, setAlertSuccessMessage] = useState<string | null>(null);
 
+  // Autocomplete states for the tracker sidebar input
+  const [trackerSuggestions, setTrackerSuggestions] = useState<string[]>([]);
+  const [showTrackerSuggestions, setShowTrackerSuggestions] = useState(false);
+
+  // Debounced effect to fetch game suggestions for tracker form
+  useEffect(() => {
+    if (alertGameTitle.trim().length < 2) {
+      setTrackerSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/deals/autocomplete?q=${encodeURIComponent(alertGameTitle)}`);
+        const data = await res.json();
+        setTrackerSuggestions(data);
+      } catch (err) {
+        console.warn('Could not fetch tracker autocomplete suggestions', err);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [alertGameTitle]);
+
   // Progressive Web App installation support state
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isPwaInstalled, setIsPwaInstalled] = useState<boolean>(false);
 
-  // Dynamic Google SEO Index Simulator state
-  const [seoGameTitle, setSeoGameTitle] = useState<string>('Elden Ring');
-  const [seoPlatform, setSeoPlatform] = useState<string>('Steam');
-  const [seoIntent, setSeoIntent] = useState<string>('Precios con Impuestos Argentina');
+
 
   // Sync state functions
   const fetchRates = async () => {
@@ -225,13 +432,7 @@ export default function App() {
   };
 
   const fetchAlerts = async () => {
-    try {
-      const res = await fetch('/api/alerts');
-      const data = await res.json();
-      setAlerts(data);
-    } catch (e) {
-      console.error(e);
-    }
+    // Synchronized automatically in real time via Firestore listener (subscribeUserAlerts)
   };
 
   const fetchNotifications = async () => {
@@ -337,19 +538,7 @@ export default function App() {
     return fallbacks[sum % fallbacks.length];
   };
 
-  // Dynamic SEO Title & Meta update based on active selected games
-  useEffect(() => {
-    if (seoGameTitle) {
-      document.title = `Precios de ${seoGameTitle} en ${seoPlatform} con Impuestos | TheGameOff`;
-      let metaDesc = document.querySelector('meta[name="description"]');
-      if (!metaDesc) {
-        metaDesc = document.createElement('meta');
-        metaDesc.setAttribute('name', 'description');
-        document.head.appendChild(metaDesc);
-      }
-      metaDesc.setAttribute('content', `Compará precios finales de ${seoGameTitle} para ${seoPlatform} en las tiendas oficiales de Argentina. Calculá IVA digital, PAIS y IIBB actualizados.`);
-    }
-  }, [seoGameTitle, seoPlatform]);
+
 
   // PWA installers registration & trackers
   useEffect(() => {
@@ -373,7 +562,6 @@ export default function App() {
   // Triggered on page load & refresh
   useEffect(() => {
     fetchRates();
-    fetchAlerts();
     fetchNotifications();
     
     // Attempt to load current fresh deals via search grounding in background
@@ -382,16 +570,52 @@ export default function App() {
     // Setup live polling every 5.5 seconds to query new notification updates
     const pollInterval = setInterval(() => {
       fetchNotifications();
-      fetchAlerts();
     }, 5500);
 
     return () => clearInterval(pollInterval);
   }, []);
 
-  // Subscribe alert hander
+  // Real-time Firestore alerts subscription
+  useEffect(() => {
+    if (!currentUser) {
+      setAlerts([]);
+      return;
+    }
+
+    const unsubscribe = subscribeUserAlerts(
+      currentUser.uid,
+      (firestoreAlerts) => {
+        const mappedAlerts: NotificationAlert[] = firestoreAlerts.map(a => ({
+          id: a.id,
+          gameTitle: a.gameTitle,
+          platform: a.platform as Platform,
+          targetPriceUsd: a.targetPriceUsd,
+          targetPriceArs: a.targetPriceArs,
+          discountPercentThreshold: a.discountPercentThreshold,
+          isActive: true,
+          createdAt: a.createdAt?.seconds 
+            ? new Date(a.createdAt.seconds * 1000).toISOString() 
+            : (typeof a.createdAt === 'string' ? a.createdAt : new Date().toISOString())
+        }));
+        // Sort newest on top
+        mappedAlerts.sort((x, y) => new Date(y.createdAt).getTime() - new Date(x.createdAt).getTime());
+        setAlerts(mappedAlerts);
+        localStorage.setItem('tgo_user_alerts_v1', JSON.stringify(mappedAlerts));
+      },
+      (error) => {
+        console.error('Error fetching real-time alerts from Firestore:', error);
+      }
+    );
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [currentUser]);
+
+  // Subscribe alert handler
   const handleAddAlert = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!alertGameTitle.trim()) return;
+    if (!alertGameTitle.trim() || !currentUser) return;
 
     try {
       const isUSD = alertPlatform === Platform.STEAM || alertPlatform === Platform.PLAYSTATION;
@@ -412,68 +636,61 @@ export default function App() {
         payload.discountPercentThreshold = alertDiscountThreshold;
       }
 
-      const res = await fetch('/api/alerts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      // Save alert directly to robust real-time cloud database
+      await addAlert(currentUser.uid, payload);
 
-      if (res.ok) {
-        setAlertGameTitle('');
-        setAlertPrice('');
-        setAlertDiscountThreshold(0);
-        fetchAlerts();
-        fetchNotifications();
-        playSuccessSound();
-        addXP(25); // Award hunter reputation XP
-        
-        setAlertSuccessMessage(`¡Preciometro configurado! Te avisaremos cuando ${payload.gameTitle} baje de precio.`);
-        setTimeout(() => setAlertSuccessMessage(null), 4000);
-      }
+      setAlertGameTitle('');
+      setAlertPrice('');
+      setAlertDiscountThreshold(0);
+      fetchNotifications();
+      playSuccessSound();
+      addXP(25); // Award hunter reputation XP
+      
+      setAlertSuccessMessage(`¡Preciometro configurado! Te avisaremos cuando ${payload.gameTitle} baje de precio.`);
+      setTimeout(() => setAlertSuccessMessage(null), 4000);
+
+      // Redirect to Alerts tab so they can see the "Historial de Seguidos" on the right!
+      setActiveTab('alerts');
     } catch (e) {
-      console.error(e);
+      console.error('Error creating user alert in Firestore', e);
     }
   };
 
   // Quick subscribe handler from find result
   const handleQuickAddAlertFromSearch = async (gameTitle: string, platform: Platform, currentPrice: number, isUSD: boolean) => {
+    if (!currentUser) return;
     try {
-      const payload = {
+      const payload: any = {
         gameTitle,
         platform,
         [isUSD ? 'targetPriceUsd' : 'targetPriceArs']: Math.round(currentPrice * 0.9) // Alert if drops 10% more
       };
 
-      const res = await fetch('/api/alerts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      // Save alert directly to robust real-time cloud database
+      await addAlert(currentUser.uid, payload);
 
-      if (res.ok) {
-        fetchAlerts();
-        fetchNotifications();
-        playSuccessSound();
-        addXP(15); // Award hunter search tracking XP
+      fetchNotifications();
+      playSuccessSound();
+      addXP(15); // Award hunter search tracking XP
 
-        setAlertSuccessMessage(`¡Agregado!: Configurado aviso para ${gameTitle} si baja de ${isUSD ? 'u$s' : '$'} ${payload[isUSD ? 'targetPriceUsd' : 'targetPriceArs']}`);
-        setTimeout(() => setAlertSuccessMessage(null), 4505);
-      }
+      setAlertSuccessMessage(`¡Agregado!: Configurado aviso para ${gameTitle} si baja de ${isUSD ? 'u$s' : '$'} ${payload[isUSD ? 'targetPriceUsd' : 'targetPriceArs']}`);
+      setTimeout(() => setAlertSuccessMessage(null), 4505);
+
+      // Redirect to Alerts tab so they can see the "Historial de Seguidos" on the right!
+      setActiveTab('alerts');
     } catch (e) {
-      console.error(e);
+      console.error('Error creating search alert in Firestore', e);
     }
   };
 
   // Delete Alert subscription
   const handleDeleteAlert = async (id: string) => {
     try {
-      const res = await fetch(`/api/alerts/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setAlerts(prev => prev.filter(a => a.id !== id));
-        playDeleteSound();
-      }
+      // Delete alert directly from cloud database (real-time listener updates UI)
+      await deleteAlert(id);
+      playDeleteSound();
     } catch (e) {
-      console.error(e);
+      console.error('Error deleting alert in Firestore', e);
     }
   };
 
@@ -578,10 +795,148 @@ export default function App() {
     }
   }, [wishlistAlertMatches, browserNotificationGranted]);
 
+  // Filtered and sorted deals based on selected filter
+  const filteredDeals = React.useMemo(() => {
+    let list = [...highlightDeals];
+    
+    if (activeCatalogFilter === 'discount') {
+      // Sort by highest discount percentage descending
+      list.sort((a, b) => b.discountPercent - a.discountPercent);
+    } else if (activeCatalogFilter === 'price-error') {
+      // Filter for premium historical pricing errors / exceptionally cheap discounts (>= 75%)
+      list = list.filter(d => d.discountPercent >= 75 || d.originalPrice > d.currentPrice * 4);
+    } else if (activeCatalogFilter === 'steam') {
+      list = list.filter(d => d.platform === Platform.STEAM || d.platform === 'Steam');
+    } else if (activeCatalogFilter === 'xbox') {
+      list = list.filter(d => d.platform === Platform.XBOX || d.platform === 'Xbox Store');
+    }
+    
+    return list;
+  }, [highlightDeals, activeCatalogFilter]);
+
   // Render variables for premium highlights grid
-  const primaryFeatured = highlightDeals[0];
-  const listFeatured = highlightDeals.slice(1, 4);
-  const remainingDeals = highlightDeals.slice(4);
+  const primaryFeatured = filteredDeals[0];
+  const listFeatured = filteredDeals.slice(1, 4);
+  const remainingDeals = filteredDeals.slice(4);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#050505] flex flex-col items-center justify-center p-4">
+        <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest animate-pulse">Sincronizando con Servidores Gamer...</span>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-[#050505] text-[#e0e0e0] font-sans antialiased flex flex-col items-center justify-center p-4 relative overflow-hidden selection:bg-indigo-500/30 selection:text-white">
+        {/* Ambient background glow */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-indigo-900/10 rounded-full blur-[120px] pointer-events-none" />
+        <div className="absolute bottom-10 left-10 w-72 h-72 bg-purple-900/5 rounded-full blur-[100px] pointer-events-none" />
+        
+        <div className="w-full max-w-md bg-slate-900/60 border border-white/5 backdrop-blur-md rounded-2xl overflow-hidden shadow-2xl relative z-10 flex flex-col p-6 sm:p-8 animate-fade-in">
+          <div className="flex flex-col items-center text-center gap-2 mb-8">
+            <div className="w-12 h-12 bg-indigo-950 border border-indigo-500/20 rounded-xl flex items-center justify-center text-lg shadow-lg font-black text-indigo-400">
+              TGO
+            </div>
+            <h1 className="text-2xl font-black tracking-widest text-white uppercase font-serif mt-2">
+              thegame<span className="text-indigo-400">off</span>
+            </h1>
+            <p className="text-xs text-slate-400 max-w-xs mt-1 leading-relaxed">
+              Catálogo de ofertas gamer, estimación impositiva en tiempo real y detector inteligente de precios bajos en Argentina.
+            </p>
+          </div>
+
+          <div className="flex border-b border-white/5 mb-6">
+            <button
+              onClick={() => {
+                playClickSound();
+                setIsRegister(false);
+                setAuthError(null);
+              }}
+              className={`flex-1 pb-3 text-xs font-bold uppercase tracking-wider transition-colors outline-none cursor-pointer ${
+                !isRegister ? 'text-indigo-400 border-b-2 border-indigo-500 font-extrabold' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Iniciar Sesión
+            </button>
+            <button
+              onClick={() => {
+                playClickSound();
+                setIsRegister(true);
+                setAuthError(null);
+              }}
+              className={`flex-1 pb-3 text-xs font-bold uppercase tracking-wider transition-colors outline-none cursor-pointer ${
+                isRegister ? 'text-indigo-400 border-b-2 border-indigo-500 font-extrabold' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Crear Cuenta
+            </button>
+          </div>
+
+          {authError && (
+            <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl flex items-center gap-2">
+              <span className="shrink-0 text-sm">⚠️</span>
+              <p>{authError}</p>
+            </div>
+          )}
+
+          <form onSubmit={handleAuthSubmit} className="space-y-4">
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1 uppercase tracking-wider font-semibold">Correo Electrónico</label>
+              <input
+                type="email"
+                required
+                placeholder="tu_correo@gamer.com"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 p-2.5 rounded-xl text-xs text-white outline-none"
+                id="auth-email-input"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-slate-400 block mb-1 uppercase tracking-wider font-semibold">Contraseña</label>
+              <input
+                type="password"
+                required
+                placeholder="********"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 p-2.5 rounded-xl text-xs text-white outline-none"
+                id="auth-password-input"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={authSubmitting}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800/50 text-white py-3 rounded-xl text-xs font-semibold tracking-widest uppercase transition-colors flex items-center justify-center gap-1.5 cursor-pointer mt-2"
+              id="auth-submit-btn"
+            >
+              {authSubmitting ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                  <span>Procesando...</span>
+                </>
+              ) : (
+                <span>{isRegister ? 'Registrarse 🛡️ font-sans' : 'Ingresar al Radar 🕹️'}</span>
+              )}
+            </button>
+          </form>
+
+          <p className="text-[10px] text-slate-500 text-center mt-6 uppercase tracking-wider font-mono">
+            {isRegister ? '¿Ya tenés cuenta?' : '¿Sos nuevo?'} {isRegister ? (
+              <button type="button" onClick={() => { playClickSound(); setIsRegister(false); setAuthError(null); }} className="text-indigo-400 hover:underline outline-none bg-transparent border-0 cursor-pointer font-bold font-mono">Iniciá sesión</button>
+            ) : (
+              <button type="button" onClick={() => { playClickSound(); setIsRegister(true); setAuthError(null); }} className="text-indigo-400 hover:underline outline-none bg-transparent border-0 cursor-pointer font-bold font-mono">Registrate gratis</button>
+            )}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-[#e0e0e0] font-sans antialiased selection:bg-indigo-500/30 selection:text-white flex flex-col">
@@ -646,6 +1001,22 @@ export default function App() {
               <span className="absolute bottom-[-16px] left-0 right-0 h-[2.5px] bg-indigo-500" />
             )}
           </button>
+
+          <button
+            onClick={() => {
+              playTabSound();
+              setActiveTab('community');
+            }}
+            className={`transition-colors py-1 relative ${
+              activeTab === 'community' ? 'text-white font-bold' : 'hover:text-white/80'
+            }`}
+            id="tab-community"
+          >
+            Comunidad Gamer 📢
+            {activeTab === 'community' && (
+              <span className="absolute bottom-[-16px] left-0 right-0 h-[2.5px] bg-emerald-500" />
+            )}
+          </button>
         </div>
 
         {/* Real-Time Live status & Toast alerts component */}
@@ -660,6 +1031,31 @@ export default function App() {
             onMarkAllRead={handleMarkAllRead}
             onSimulateDeal={handleSimulateDeal}
           />
+
+          {currentUser && (
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:inline-block text-[10px] font-semibold text-slate-400 bg-slate-900 border border-white/5 py-1 px-2.5 rounded-lg max-w-[120px] truncate" title={currentUser.email || ''}>
+                {currentUser.email?.split('@')[0]}
+              </span>
+              <button
+                onClick={async () => {
+                  try {
+                    playClickSound();
+                    localStorage.removeItem('tgo_simulated_user_v1');
+                    setCurrentUser(null);
+                    await signOut(auth);
+                  } catch (err) {
+                    console.error('Error al cerrar sesión:', err);
+                  }
+                }}
+                className="text-[10px] font-bold text-slate-300 hover:text-rose-400 bg-rose-500/5 hover:bg-rose-500/10 border border-white/5 hover:border-rose-500/20 px-2.5 py-1.5 rounded-l-lg rounded-r-lg uppercase tracking-widest transition-all duration-150 cursor-pointer"
+                title="Cerrar Sesión"
+                id="btn-sign-out"
+              >
+                Cerrar Sesión
+              </button>
+            </div>
+          )}
         </div>
       </nav>
 
@@ -678,10 +1074,107 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <main className="flex-grow max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
+      <main className="flex-grow max-w-7xl w-full mx-auto p-4 md:p-6 flex flex-col gap-6">
         
-        {/* Left Side: Live notification list & Subscription forms - 3 Cols on desktop */}
-        <section className="lg:col-span-3 flex flex-col gap-5">
+        {/* Prominent Search Bar Section at the very top of page content */}
+        <section className="bg-slate-900/60 border border-indigo-500/10 backdrop-blur-sm p-4 md:p-6 rounded-2xl shadow-xl flex flex-col gap-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-white/5 pb-3">
+            <div>
+              <h2 className="text-sm font-black uppercase tracking-widest text-[#a5b4fc] font-serif flex items-center gap-2">
+                🔍 Buscador Inteligente AI ~ Precios con Impuestos
+              </h2>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Buscá cualquier juego de PC o consola. Sincronizamos precios oficiales, aplicamos impuestos vigentes y comparamos tiendas.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/20 px-3 py-1 rounded-full text-[10px] text-indigo-400 font-mono tracking-tight shrink-0 self-start md:self-auto">
+              <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse" />
+              Sincronizado con impuestos del {(getTaxPercentage(taxConfig))}%
+            </div>
+          </div>
+          
+          <GameSearch 
+            taxConfig={taxConfig} 
+            onAddCustomAlert={handleQuickAddAlertFromSearch} 
+          />
+
+          {/* Quick catalog filter action bar */}
+          <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-white/5">
+            <span className="text-[10px] text-slate-500 uppercase font-mono tracking-wider mr-1">Filtros Rápidos:</span>
+            
+            <button
+              onClick={() => {
+                playClickSound();
+                setActiveCatalogFilter('all');
+              }}
+              className={`text-[11px] px-3 py-1.5 rounded-lg border transition-all font-medium flex items-center gap-1 cursor-pointer ${
+                activeCatalogFilter === 'all'
+                  ? 'bg-indigo-600/35 border-indigo-500 text-white font-semibold shadow-md'
+                  : 'bg-slate-950/40 border-white/5 hover:border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Todos los Juegos
+            </button>
+            <button
+              onClick={() => {
+                playClickSound();
+                setActiveCatalogFilter('discount');
+              }}
+              className={`text-[11px] px-3 py-1.5 rounded-lg border transition-all font-medium flex items-center gap-1 cursor-pointer ${
+                activeCatalogFilter === 'discount'
+                  ? 'bg-rose-600/35 border-rose-500 text-white font-semibold shadow-md'
+                  : 'bg-slate-950/40 border-white/5 hover:border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              🔥 Mayor Descuento
+            </button>
+            <button
+              onClick={() => {
+                playClickSound();
+                setActiveCatalogFilter('price-error');
+              }}
+              className={`text-[11px] px-3 py-1.5 rounded-lg border transition-all font-medium flex items-center gap-1 cursor-pointer ${
+                activeCatalogFilter === 'price-error'
+                  ? 'bg-amber-600/35 border-amber-500 text-white font-semibold shadow-md'
+                  : 'bg-slate-950/40 border-white/5 hover:border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              ⚠️ Errores de Precio (Históricos)
+            </button>
+            <button
+              onClick={() => {
+                playClickSound();
+                setActiveCatalogFilter('steam');
+              }}
+              className={`text-[11px] px-3 py-1.5 rounded-lg border transition-all font-medium flex items-center gap-1 cursor-pointer ${
+                activeCatalogFilter === 'steam'
+                  ? 'bg-blue-600/35 border-blue-500 text-white font-semibold shadow-md'
+                  : 'bg-slate-950/40 border-white/5 hover:border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              🎮 Tienda Steam
+            </button>
+            <button
+              onClick={() => {
+                playClickSound();
+                setActiveCatalogFilter('xbox');
+              }}
+              className={`text-[11px] px-3 py-1.5 rounded-lg border transition-all font-medium flex items-center gap-1 cursor-pointer ${
+                activeCatalogFilter === 'xbox'
+                  ? 'bg-green-600/40 border-green-500 text-white font-semibold shadow-md'
+                  : 'bg-slate-950/40 border-white/5 hover:border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              💚 Tienda Xbox
+            </button>
+          </div>
+        </section>
+
+        {/* Content grid block */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
+          
+          {/* Left Side: Live notification list & Subscription forms - 3 Cols on desktop, sticky on scroll */}
+          <section className="lg:col-span-3 flex flex-col gap-5 lg:sticky lg:top-24 h-fit">
           
           {/* Main quick stats card */}
           <div className="bg-slate-900/40 border border-white/5 rounded-xl p-4 flex flex-col gap-3">
@@ -726,7 +1219,7 @@ export default function App() {
             </h3>
             
             <form onSubmit={handleAddAlert} className="space-y-3 mt-1">
-              <div>
+              <div className="relative">
                 <label className="text-[10px] text-slate-400 block mb-1">Título del Juego *</label>
                 <input
                   type="text"
@@ -734,9 +1227,32 @@ export default function App() {
                   placeholder="Ej: Silksong, FIFA, etc."
                   value={alertGameTitle}
                   onChange={(e) => setAlertGameTitle(e.target.value)}
+                  onFocus={() => setShowTrackerSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowTrackerSuggestions(false), 250)}
                   className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 p-2 rounded text-xs text-white outline-none"
                   id="alert-game-title-input"
+                  autoComplete="off"
                 />
+
+                {showTrackerSuggestions && trackerSuggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full z-50 mt-1 bg-slate-950 border border-slate-800 rounded-lg overflow-hidden shadow-2xl divide-y divide-white/5">
+                    {trackerSuggestions.map((suggestion, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        onClick={() => {
+                          playClickSound();
+                          setAlertGameTitle(suggestion);
+                          setTrackerSuggestions([]);
+                          setShowTrackerSuggestions(false);
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-[11px] text-slate-300 hover:text-white hover:bg-slate-900 transition-colors cursor-pointer"
+                      >
+                        🎮 {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-3 gap-2">
@@ -802,79 +1318,7 @@ export default function App() {
 
           <TrendingPanel />
 
-          {/* Interactive Google SEO Console Simulator */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col gap-3">
-            <div className="flex items-center gap-1.5 border-b border-white/5 pb-2">
-              <span className="text-[11px] font-black uppercase tracking-widest text-[#a5b4fc] font-serif">
-                🔍 Consola SEO Google
-              </span>
-            </div>
-            <p className="text-[10px] text-slate-400 leading-tight">
-              Probá cómo se ve la indexación de THEGAMEOFF en los resultados de Google cuando busquen precios:
-            </p>
 
-            <div className="space-y-2 mt-1">
-              <div>
-                <label className="text-[9px] text-slate-500 block uppercase font-mono tracking-wider">Juego simulado</label>
-                <input 
-                  type="text" 
-                  value={seoGameTitle} 
-                  onChange={(e) => setSeoGameTitle(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 p-1.5 rounded text-[11px] text-white font-sans outline-none"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <div>
-                  <label className="text-[9px] text-slate-500 block uppercase font-mono tracking-wider">Tienda</label>
-                  <select 
-                    value={seoPlatform} 
-                    onChange={(e) => setSeoPlatform(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 p-1.5 rounded text-[10px] text-slate-300 pointer font-sans"
-                  >
-                    <option value="Steam">Steam</option>
-                    <option value="Xbox Store">Xbox Store</option>
-                    <option value="Nintendo eShop">Nintendo</option>
-                    <option value="Sony PSN">PS Store</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[9px] text-slate-500 block uppercase font-mono tracking-wider">Intento</label>
-                  <select 
-                    value={seoIntent} 
-                    onChange={(e) => setSeoIntent(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 p-1.5 rounded text-[10px] text-slate-300 pointer font-sans"
-                  >
-                    <option value="Precios con Impuestos">Impuestos</option>
-                    <option value="Ofertas Baratas">Ofertas</option>
-                    <option value="Dólar Tarjeta">Dólar</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* Google Search Result Mock styling */}
-            <div className="bg-white text-slate-900 p-3 rounded-lg text-left shadow-md mt-1 select-none text-[11px] font-sans">
-              <div className="flex items-center gap-1.5 text-[9px] text-[#202124] truncate mb-1">
-                <span>https://thegameoff.com</span>
-                <span>›</span>
-                <span>juegos</span>
-                <span>›</span>
-                <span className="font-mono text-[8.5px] text-slate-500 truncate">
-                  {seoGameTitle.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-')}
-                </span>
-              </div>
-              <h4 className="text-[12px] font-sans font-medium text-[#1a0dab] line-clamp-1 hover:underline cursor-pointer leading-tight">
-                Precios de {seoGameTitle} en {seoPlatform} con Impuestos | TheGameOff
-              </h4>
-              <p className="text-[10px] text-[#4d5156] leading-snug line-clamp-2 mt-0.5 font-sans">
-                ¿Cuánto sale realmente {seoGameTitle} en {seoPlatform} Argentina? Calculá {seoIntent.toLowerCase()} de IVA digital, PAIS e IIBB al {((getTaxPercentage(taxConfig)))}% hoy.
-              </p>
-            </div>
-            
-            <span className="text-[9px] text-indigo-400 text-center block font-mono bg-indigo-950/40 border border-indigo-500/10 py-1 rounded">
-              🎯 ¡Metadatos Dinámicos Configurados!
-            </span>
-          </div>
         </section>
 
         {/* Right Content Panels: Tabbed section representing dashboard or lists - 9 Cols on desktop */}
@@ -908,6 +1352,15 @@ export default function App() {
               className={activeTab === 'calculator' ? 'text-white border-b-2 border-indigo-500 pb-1' : ''}
             >
               Impuestos
+            </button>
+            <button 
+              onClick={() => {
+                playTabSound();
+                setActiveTab('community');
+              }}
+              className={activeTab === 'community' ? 'text-[#34d399] border-b-2 border-emerald-500 pb-1' : ''}
+            >
+              Comunidad 📢
             </button>
           </div>
 
@@ -1452,13 +1905,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* Part 2: Interactive Real Intelligent Searcher utilizing Gemini Web Grounding search */}
-              <div className="mt-2">
-                <GameSearch 
-                  taxConfig={taxConfig} 
-                  onAddCustomAlert={handleQuickAddAlertFromSearch} 
-                />
-              </div>
+
 
               {/* Informative FAQ on purchasing foreign digital assets for Argentine gamers */}
               <div className="mt-6">
@@ -1602,6 +2049,11 @@ export default function App() {
             </div>
           )}
 
+          {/* Tab 4: Comunidad Gamer - Manual Aportes & Discusión social */}
+          {activeTab === 'community' && (
+            <CommunityFeed />
+          )}
+
           {/* Fixed Bottom Metadata of Argentina Gamer Taxes according to the Sophisticated Dark concept style instruction */}
           <div className="mt-auto border-t border-white/10 pt-4 flex flex-wrap gap-4 items-center text-[11px] text-white/40">
             <div className="flex gap-1.5"><span className="text-indigo-400 font-semibold">IVA Digital:</span> 21%</div>
@@ -1619,6 +2071,7 @@ export default function App() {
           </div>
         </section>
 
+        </div>
       </main>
 
       {/* Styled simple footer */}
